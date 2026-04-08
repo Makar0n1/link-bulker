@@ -1,0 +1,28 @@
+{
+  "name": "@link-checker/worker-core",
+  "version": "0.1.0",
+  "private": true,
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "dotenv -e ../../.env -- vitest run"
+  },
+  "dependencies": {
+    "@link-checker/shared": "workspace:*",
+    "ioredis": "^5.4.1"
+  },
+  "devDependencies": {
+    "dotenv-cli": "^7.4.2",
+    "typescript": "^5.6.3",
+    "vitest": "^2.1.2"
+  }
+}

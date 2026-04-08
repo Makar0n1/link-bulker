@@ -1,0 +1,43 @@
+{
+  "name": "@link-checker/api",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "start": "dotenv -e ../../.env -- node dist/main.js",
+    "dev": "dotenv -e ../../.env -- node --watch -r @swc-node/register src/main.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "dotenv -e ../../.env -- vitest run",
+    "test:watch": "dotenv -e ../../.env -- vitest"
+  },
+  "dependencies": {
+    "@fastify/cookie": "^9.4.0",
+    "@fastify/cors": "^9.0.1",
+    "@link-checker/db": "workspace:*",
+    "@link-checker/shared": "workspace:*",
+    "@link-checker/worker-core": "workspace:*",
+    "@nestjs/common": "^10.4.4",
+    "@nestjs/core": "^10.4.4",
+    "@nestjs/platform-fastify": "^10.4.4",
+    "bcryptjs": "^2.4.3",
+    "bullmq": "^5.20.0",
+    "fastify": "^4.28.1",
+    "ioredis": "^5.4.1",
+    "reflect-metadata": "^0.2.2",
+    "rxjs": "^7.8.1",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/bcryptjs": "^2.4.6",
+    "@types/node": "^20.16.11",
+    "@types/supertest": "^6.0.2",
+    "@nestjs/testing": "^10.4.4",
+    "@swc-node/register": "^1.10.9",
+    "@swc/core": "^1.7.35",
+    "dotenv-cli": "^7.4.2",
+    "supertest": "^7.0.0",
+    "typescript": "^5.6.3",
+    "unplugin-swc": "^1.5.1",
+    "vitest": "^2.1.2"
+  }
+}

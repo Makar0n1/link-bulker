@@ -1,0 +1,178 @@
+// Link Checker — database schema
+// Generated client lives in node_modules/@prisma/client
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================
+// Auth
+// ============================================
+
+enum Role {
+  ADMIN
+  USER
+}
+
+model User {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  passwordHash String
+  role         Role     @default(USER)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  projects Project[]
+
+  @@index([email])
+}
+
+// ============================================
+// Projects
+// ============================================
+
+model Project {
+  id          String   @id @default(cuid())
+  userId      String
+  name        String
+  description String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  // DB-side mirror of Redis lock; UI uses these to disable buttons.
+  // Source of truth for cross-worker coordination is Redis.
+  manualChecking Boolean @default(false)
+  sheetsChecking Boolean @default(false)
+
+  user        User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  links       Link[]
+  sheetsTasks SheetsTask[]
+
+  @@index([userId])
+}
+
+// ============================================
+// Links (manual + sheets in one table for unified analytics)
+// ============================================
+
+enum LinkSource {
+  MANUAL
+  SHEETS
+}
+
+enum LinkStatus {
+  PENDING   // not checked yet
+  QUEUED    // sitting in BullMQ
+  CHECKING  // worker is processing
+  DONE      // checked successfully
+  ERROR     // crawl/parse failed
+}
+
+model Link {
+  id           String     @id @default(cuid())
+  projectId    String
+  sheetsTaskId String? // null for MANUAL
+  source       LinkSource
+
+  donorUrl     String  // user input
+  acceptorHost String  // normalized host, e.g. "studibucht.de"
+  acceptorRaw  String  // original user input
+
+  status LinkStatus @default(PENDING)
+
+  // Donor page facts
+  donorStatusCode    Int?
+  donorFinalUrl      String?
+  donorRedirectChain Json? // string[]
+  donorIndexable     Boolean?
+  donorMetaRobots    String?
+  donorXRobotsTag    String?
+  donorCanonical     String?
+  canonicalMatches   Boolean?
+
+  // Acceptor matches
+  linkFound        Boolean?
+  occurrences      Json? // [{ href, anchor, rel, target, tag, position }]
+  occurrencesCount Int   @default(0)
+
+  // Run metadata
+  error           String?
+  checkDurationMs Int?
+  lastCheckedAt   DateTime?
+  lastCooldownAt  DateTime? // for single-link cooldown enforcement
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  project    Project     @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  sheetsTask SheetsTask? @relation(fields: [sheetsTaskId], references: [id], onDelete: Cascade)
+
+  @@index([projectId, source])
+  @@index([projectId, status])
+  @@index([sheetsTaskId])
+  @@index([status])
+}
+
+// ============================================
+// Google Sheets sync tasks
+// ============================================
+
+enum SheetsTaskStatus {
+  IDLE
+  RUNNING
+  COMPLETED
+  FAILED
+}
+
+model SheetsTask {
+  id             String  @id @default(cuid())
+  projectId      String
+  name           String
+  spreadsheetId  String
+  // The sheet (tab) identified by its numeric `gid` from the URL.
+  // Stable across renames; we resolve to a title at run time.
+  sheetGid       Int     @default(0)
+  donorColumn    String  // "A"
+  acceptorColumn String  // "B"
+  resultStartCol String  // "C" — where to write results
+  headerRow      Int     @default(1)
+  dataStartRow   Int     @default(2)
+
+  scheduleCron  String? // null = manual only
+  lastRunAt     DateTime?
+  nextRunAt     DateTime?
+  lastRunStatus String?
+  status        SheetsTaskStatus @default(IDLE)
+  // Mirror of the Redis sheets lock for the UI; source of truth is Redis.
+  isChecking    Boolean @default(false)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  links   Link[]
+
+  @@index([projectId])
+}
+
+// ============================================
+// Audit log
+// ============================================
+
+model AuditLog {
+  id         String   @id @default(cuid())
+  userId     String?
+  action     String   // PROJECT_CREATE, CHECK_STARTED, ...
+  entityType String?
+  entityId   String?
+  metadata   Json?
+  createdAt  DateTime @default(now())
+
+  @@index([userId, createdAt])
+  @@index([entityType, entityId])
+}

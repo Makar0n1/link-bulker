@@ -1,0 +1,118 @@
+# ─── Dependencies ────────────────────────────────────────────────────────────
+node_modules/
+.pnpm-store/
+.yarn/
+jspm_packages/
+
+# ─── Build outputs ───────────────────────────────────────────────────────────
+dist/
+build/
+.next/
+out/
+*.tsbuildinfo
+*.tgz
+
+# ─── Turborepo / bundlers ────────────────────────────────────────────────────
+.turbo/
+.swc/
+.parcel-cache/
+.cache/
+
+# ─── Next.js ─────────────────────────────────────────────────────────────────
+.vercel/
+
+# ─── Env files (everything except .example) ─────────────────────────────────
+.env
+.env.*
+!.env.example
+!.env.production.example
+
+# ─── Secrets ─────────────────────────────────────────────────────────────────
+secrets/
+*.pem
+*.key
+*.crt
+*.p12
+service-account*.json
+google-service-account*.json
+credentials.json
+
+# ─── Server-side runtime artifacts (created on VPS) ─────────────────────────
+backups/
+.previous_tag
+
+# ─── Logs ────────────────────────────────────────────────────────────────────
+logs/
+*.log
+npm-debug.log*
+pnpm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+lerna-debug.log*
+
+# ─── OS junk ─────────────────────────────────────────────────────────────────
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+desktop.ini
+
+# ─── IDE / editors ───────────────────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+*.swn
+*~
+.project
+.classpath
+.settings/
+*.sublime-workspace
+*.sublime-project
+
+# ─── AI assistants / agents ──────────────────────────────────────────────────
+# Internal context — not for the public repo
+CLAUDE.md
+.claude/
+.claude*
+.cursor/
+.cursorrules
+.cursorignore
+.aider*
+.continue/
+.continuerc*
+.windsurf/
+.windsurfrules
+.codeium/
+.copilot/
+.github/copilot-instructions.md
+
+# ─── Internal docs we want to keep local ─────────────────────────────────────
+DEPLOY.md
+NOTES.md
+TODO.md
+SCRATCH.md
+docs/internal/
+
+# ─── Test / coverage ─────────────────────────────────────────────────────────
+coverage/
+.nyc_output/
+test-results/
+playwright-report/
+playwright/.cache/
+*.lcov
+
+# ─── Prisma ──────────────────────────────────────────────────────────────────
+packages/db/prisma/migrations/dev.db*
+packages/db/prisma/*.db
+packages/db/prisma/*.db-journal
+
+# ─── Misc ────────────────────────────────────────────────────────────────────
+*.bak
+*.tmp
+*.orig
+*.rej
+.history/

@@ -1,0 +1,229 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Production stack — link-check-pro.top
+#
+# Layout:
+#   web        → Next.js standalone, bound to 127.0.0.1:3000 (host nginx upstream)
+#   api        → NestJS HTTP,        bound to 127.0.0.1:3001 (host nginx upstream)
+#   migrate    → one-shot Prisma migrate deploy (runs to completion, then exits)
+#   worker     → BullMQ consumers (3 replicas via separate services)
+#   postgres   → 16-alpine, persistent volume
+#   redis      → 7-alpine, persistent volume (AOF)
+#
+# Reverse proxy: HOST nginx (already installed for other domains, see nginx/
+# directory in this repo). Containers are NOT exposed to the public internet —
+# they only listen on the loopback interface, and host nginx terminates TLS.
+#
+# Resource budget for 8vCPU / 16GB VPS — see CLAUDE.md §10.
+#
+# Image source: GHCR. Set GHCR_OWNER and IMAGE_TAG via .env.
+# ─────────────────────────────────────────────────────────────────────────────
+
+name: link-checker
+
+x-worker-base: &worker-base
+  image: ghcr.io/${GHCR_OWNER}/link-checker-worker:${IMAGE_TAG:-latest}
+  restart: unless-stopped
+  env_file: .env
+  environment:
+    NODE_ENV: production
+    DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+    REDIS_URL: redis://redis:6379
+  depends_on:
+    postgres:
+      condition: service_healthy
+    redis:
+      condition: service_healthy
+    migrate:
+      condition: service_completed_successfully
+  volumes:
+    - ./secrets:/secrets:ro
+  networks:
+    - lc-net
+  cpus: 1.0
+  mem_limit: 1500m
+  mem_reservation: 800m
+  logging:
+    driver: json-file
+    options:
+      max-size: "20m"
+      max-file: "5"
+  stop_grace_period: 60s   # let in-flight jobs drain before SIGKILL
+
+services:
+  # ─── Frontend ──────────────────────────────────────────────────────────────
+  web:
+    image: ghcr.io/${GHCR_OWNER}/link-checker-web:${IMAGE_TAG:-latest}
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      NEXT_TELEMETRY_DISABLED: "1"
+    # Bind to loopback on a non-standard port — host nginx is the only thing
+    # that talks to it. Port 4252 is unlikely to clash with other projects.
+    ports:
+      - "127.0.0.1:4252:3000"
+    networks:
+      - lc-net
+    cpus: 1.0
+    mem_limit: 1g
+    mem_reservation: 400m
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:3000/"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # ─── API ───────────────────────────────────────────────────────────────────
+  api:
+    image: ghcr.io/${GHCR_OWNER}/link-checker-api:${IMAGE_TAG:-latest}
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      REDIS_URL: redis://redis:6379
+      PORT: "3001"
+      HOST: 0.0.0.0
+    # Bind to loopback on a non-standard port — host nginx is the only thing
+    # that talks to it. Port 4253 is unlikely to clash with other projects.
+    ports:
+      - "127.0.0.1:4253:3001"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    networks:
+      - lc-net
+    cpus: 1.5
+    mem_limit: 1500m
+    mem_reservation: 600m
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:3001/api/v1/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "5"
+
+  # ─── One-shot Prisma migrate ──────────────────────────────────────────────
+  # Runs `prisma migrate deploy` against the API image (which has the schema
+  # and prisma CLI), then exits. Compose `service_completed_successfully` on
+  # this gate prevents api/worker from starting before the schema is up to date.
+  migrate:
+    image: ghcr.io/${GHCR_OWNER}/link-checker-api:${IMAGE_TAG:-latest}
+    restart: "no"
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - lc-net
+    working_dir: /app/packages/db
+    entrypoint: ["/sbin/tini", "--"]
+    command: ["pnpm", "exec", "prisma", "migrate", "deploy"]
+
+  # ─── Workers (3 replicas) ──────────────────────────────────────────────────
+  # Three separate service entries so each one has its own container name and
+  # restart policy. Why not `deploy.replicas`? That requires Swarm mode; we run
+  # plain `docker compose up -d` so we list them out.
+  worker-1:
+    <<: *worker-base
+    container_name: lc-worker-1
+  worker-2:
+    <<: *worker-base
+    container_name: lc-worker-2
+  worker-3:
+    <<: *worker-base
+    container_name: lc-worker-3
+
+  # ─── Postgres ──────────────────────────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - lc-net
+    cpus: 1.5
+    mem_limit: 4g
+    mem_reservation: 1g
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    command:
+      - postgres
+      - -c
+      - max_connections=200
+      - -c
+      - shared_buffers=512MB
+      - -c
+      - effective_cache_size=2GB
+      - -c
+      - work_mem=8MB
+      - -c
+      - maintenance_work_mem=128MB
+      - -c
+      - random_page_cost=1.1
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "5"
+
+  # ─── Redis ─────────────────────────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command:
+      - redis-server
+      - --appendonly
+      - "yes"
+      - --maxmemory
+      - 768mb
+      - --maxmemory-policy
+      - allkeys-lru
+    volumes:
+      - redis_data:/data
+    networks:
+      - lc-net
+    cpus: 0.5
+    mem_limit: 1g
+    mem_reservation: 400m
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+networks:
+  lc-net:
+    driver: bridge
+
+volumes:
+  postgres_data:
+  redis_data:

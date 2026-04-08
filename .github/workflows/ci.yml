@@ -1,0 +1,96 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+jobs:
+  test:
+    name: Lint + Typecheck + Test
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: linkchecker
+          POSTGRES_PASSWORD: changeme
+          POSTGRES_DB: linkchecker
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U linkchecker"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      DATABASE_URL: postgresql://linkchecker:changeme@localhost:5432/linkchecker
+      REDIS_URL: redis://localhost:6379
+      AUTH_SECRET: ci-test-secret-do-not-use-in-prod-xxxxxxxxxxxx
+      ADMIN_EMAIL: admin@ci.local
+      # bcryptjs hash of "ci-password" with cost 4 (escaped $)
+      ADMIN_PASSWORD_HASH: \$2a\$04\$x8mE8VxQYyLxqQ9LqDkE3eT4q5ZvR2u8H6pY1mC9oN0kI5wPbS3aK
+      FIRECRAWL_API_KEY: ci-fake-key
+      FIRECRAWL_CONCURRENCY: "10"
+      PUBLIC_WEB_URL: http://localhost:3000
+      PUBLIC_API_URL: http://localhost:3001
+      NEXT_PUBLIC_API_URL: http://localhost:3001
+      MAX_MANUAL_URLS_PER_TASK: "1000"
+      SINGLE_LINK_RECHECK_COOLDOWN_SEC: "60"
+      PER_DOMAIN_RPS: "2"
+      WORKER_CONCURRENCY: "5"
+      GOOGLE_SERVICE_ACCOUNT_EMAIL: ci@example.com
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9.12.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Write .env for dotenv-cli wrappers
+        run: |
+          cat > .env <<EOF
+          DATABASE_URL=$DATABASE_URL
+          REDIS_URL=$REDIS_URL
+          AUTH_SECRET=$AUTH_SECRET
+          ADMIN_EMAIL=$ADMIN_EMAIL
+          ADMIN_PASSWORD_HASH=$ADMIN_PASSWORD_HASH
+          FIRECRAWL_API_KEY=$FIRECRAWL_API_KEY
+          FIRECRAWL_CONCURRENCY=$FIRECRAWL_CONCURRENCY
+          PUBLIC_WEB_URL=$PUBLIC_WEB_URL
+          PUBLIC_API_URL=$PUBLIC_API_URL
+          NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL
+          MAX_MANUAL_URLS_PER_TASK=$MAX_MANUAL_URLS_PER_TASK
+          SINGLE_LINK_RECHECK_COOLDOWN_SEC=$SINGLE_LINK_RECHECK_COOLDOWN_SEC
+          PER_DOMAIN_RPS=$PER_DOMAIN_RPS
+          WORKER_CONCURRENCY=$WORKER_CONCURRENCY
+          GOOGLE_SERVICE_ACCOUNT_EMAIL=$GOOGLE_SERVICE_ACCOUNT_EMAIL
+          WORKER_DISABLE_BULLMQ=1
+          EOF
+
+      - run: pnpm db:generate
+      - run: pnpm --filter @link-checker/db exec prisma migrate deploy
+
+      - run: pnpm turbo run typecheck
+      - run: pnpm turbo run test --concurrency=1

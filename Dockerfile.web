@@ -1,0 +1,66 @@
+# syntax=docker/dockerfile:1.7
+# ─────────────────────────────────────────────────────────────────────────────
+# Web image — Next.js 15 with `output: 'standalone'`
+#
+# Notes:
+#   - NEXT_PUBLIC_API_URL must be baked at BUILD time (Next inlines it into
+#     the client bundle). Pass via --build-arg.
+#   - Standalone output produces a self-contained server.js that needs only
+#     `.next/static` and (optionally) `public/` next to it.
+# ─────────────────────────────────────────────────────────────────────────────
+
+FROM node:20-alpine AS base
+RUN apk add --no-cache libc6-compat tini wget \
+    && corepack enable \
+    && corepack prepare pnpm@9.12.0 --activate
+WORKDIR /app
+ENV CI=true
+
+# ─── Pruner ──────────────────────────────────────────────────────────────────
+FROM base AS pruner
+RUN npm install -g turbo@2.1.3
+COPY . .
+RUN turbo prune @link-checker/web --docker
+
+# ─── Builder ─────────────────────────────────────────────────────────────────
+FROM base AS builder
+COPY --from=pruner /app/out/json/ ./
+COPY --from=pruner /app/out/pnpm-lock.yaml ./pnpm-lock.yaml
+RUN pnpm install --frozen-lockfile
+
+COPY --from=pruner /app/out/full/ ./
+
+# Public URL of the API — baked into the client bundle.
+ARG NEXT_PUBLIC_API_URL=https://api.link-check-pro.top
+ENV NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL
+ENV NEXT_TELEMETRY_DISABLED=1
+
+RUN pnpm turbo run build --filter=@link-checker/web
+
+# ─── Runtime ─────────────────────────────────────────────────────────────────
+FROM node:20-alpine AS runtime
+RUN apk add --no-cache tini wget
+WORKDIR /app
+ENV NODE_ENV=production \
+    NEXT_TELEMETRY_DISABLED=1 \
+    PORT=3000 \
+    HOSTNAME=0.0.0.0
+
+# Standalone output already contains a minimal node_modules with everything
+# next/server needs.
+COPY --from=builder /app/apps/web/.next/standalone ./
+COPY --from=builder /app/apps/web/.next/static ./apps/web/.next/static
+
+# Non-root
+RUN addgroup -g 1001 -S nodejs \
+    && adduser -S -u 1001 -G nodejs lc \
+    && chown -R lc:nodejs /app
+USER lc
+
+EXPOSE 3000
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
+    CMD wget -q --spider http://127.0.0.1:3000/ || exit 1
+
+ENTRYPOINT ["/sbin/tini", "--"]
+CMD ["node", "apps/web/server.js"]

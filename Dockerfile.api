@@ -1,0 +1,62 @@
+# syntax=docker/dockerfile:1.7
+# ─────────────────────────────────────────────────────────────────────────────
+# API image — NestJS + Fastify on Node 20
+# Multi-stage:
+#   1. base    — node + pnpm + system deps (openssl needed by Prisma)
+#   2. pruner  — turbo prune to extract minimal monorepo for @link-checker/api
+#   3. builder — install all deps, prisma generate, build with turbo
+#   4. runtime — copy built app, run as non-root via tini
+# ─────────────────────────────────────────────────────────────────────────────
+
+FROM node:20-alpine AS base
+RUN apk add --no-cache libc6-compat openssl tini wget \
+    && corepack enable \
+    && corepack prepare pnpm@9.12.0 --activate
+WORKDIR /app
+ENV CI=true
+
+# ─── Pruner ──────────────────────────────────────────────────────────────────
+FROM base AS pruner
+RUN npm install -g turbo@2.1.3
+COPY . .
+RUN turbo prune @link-checker/api --docker
+
+# ─── Builder ─────────────────────────────────────────────────────────────────
+FROM base AS builder
+# Install deps first (cached layer keyed off package.json + lockfile)
+COPY --from=pruner /app/out/json/ ./
+COPY --from=pruner /app/out/pnpm-lock.yaml ./pnpm-lock.yaml
+RUN pnpm install --frozen-lockfile
+
+# Copy pruned source
+COPY --from=pruner /app/out/full/ ./
+
+# Generate Prisma client (no DATABASE_URL needed for generate)
+RUN cd packages/db && pnpm exec prisma generate
+
+# Build api + its workspace deps
+RUN pnpm turbo run build --filter=@link-checker/api
+
+# ─── Runtime ─────────────────────────────────────────────────────────────────
+FROM base AS runtime
+ENV NODE_ENV=production \
+    PORT=3001 \
+    HOST=0.0.0.0
+
+# Copy the entire built workspace. Slightly larger image but bulletproof
+# against pnpm workspace symlink resolution issues at runtime.
+COPY --from=builder /app /app
+
+# Drop root
+RUN addgroup -g 1001 -S nodejs \
+    && adduser -S -u 1001 -G nodejs lc \
+    && chown -R lc:nodejs /app
+USER lc
+
+EXPOSE 3001
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
+    CMD wget -q --spider http://127.0.0.1:3001/api/v1/health || exit 1
+
+ENTRYPOINT ["/sbin/tini", "--"]
+CMD ["node", "apps/api/dist/main.js"]
