@@ -1,11 +1,16 @@
 # syntax=docker/dockerfile:1.7
 # ─────────────────────────────────────────────────────────────────────────────
 # API image — NestJS + Fastify on Node 20
-# Multi-stage:
-#   1. base    — node + pnpm + system deps (openssl needed by Prisma)
-#   2. pruner  — turbo prune to extract minimal monorepo for @link-checker/api
-#   3. builder — install all deps, prisma generate, build with turbo
-#   4. runtime — copy built app, run as non-root via tini
+#
+# Strategy:
+#   - Skip `turbo prune`. The combination of pnpm + workspace deps in a pruned
+#     monorepo is fragile (workspace symlinks don't survive the prune cleanly,
+#     so types from `@link-checker/db` etc. resolve to `any` and the build
+#     dies with hundreds of TS errors).
+#   - Use pnpm's "hoisted" node_modules linker so workspace packages are
+#     materialised as real directories, exactly like npm/yarn.
+#   - Build all workspace deps first, then api itself, then copy everything
+#     into a non-root runtime stage.
 # ─────────────────────────────────────────────────────────────────────────────
 
 FROM node:20-alpine AS base
@@ -15,27 +20,27 @@ RUN apk add --no-cache libc6-compat openssl tini wget \
 WORKDIR /app
 ENV CI=true
 
-# ─── Pruner ──────────────────────────────────────────────────────────────────
-FROM base AS pruner
-RUN npm install -g turbo@2.1.3
-COPY . .
-RUN turbo prune @link-checker/api --docker
-
 # ─── Builder ─────────────────────────────────────────────────────────────────
 FROM base AS builder
-# Install deps first (cached layer keyed off package.json + lockfile)
-COPY --from=pruner /app/out/json/ ./
-COPY --from=pruner /app/out/pnpm-lock.yaml ./pnpm-lock.yaml
-RUN pnpm install --frozen-lockfile
 
-# Copy pruned source
-COPY --from=pruner /app/out/full/ ./
+# Copy everything (filtered by .dockerignore)
+COPY . .
+
+# Force hoisted (npm-style) node_modules so all workspace deps are real dirs.
+RUN echo "node-linker=hoisted" > .npmrc \
+    && echo "shamefully-hoist=true" >> .npmrc \
+    && echo "public-hoist-pattern[]=*" >> .npmrc
+
+RUN pnpm install --no-frozen-lockfile
 
 # Generate Prisma client (no DATABASE_URL needed for generate)
 RUN cd packages/db && pnpm exec prisma generate
 
-# Build api + its workspace deps
-RUN pnpm turbo run build --filter=@link-checker/api
+# Build all workspace deps + api itself in dependency order
+RUN pnpm --filter @link-checker/shared build \
+    && pnpm --filter @link-checker/db build \
+    && pnpm --filter @link-checker/worker-core build \
+    && pnpm --filter @link-checker/api build
 
 # ─── Runtime ─────────────────────────────────────────────────────────────────
 FROM base AS runtime
@@ -43,8 +48,8 @@ ENV NODE_ENV=production \
     PORT=3001 \
     HOST=0.0.0.0
 
-# Copy the entire built workspace. Slightly larger image but bulletproof
-# against pnpm workspace symlink resolution issues at runtime.
+# Copy entire built workspace. Slightly larger image but bulletproof against
+# pnpm workspace symlink resolution issues at runtime.
 COPY --from=builder /app /app
 
 # Drop root

@@ -18,6 +18,7 @@ import {
   type SingleLinkJobData,
 } from '@link-checker/shared';
 import { LockManager } from '@link-checker/worker-core';
+import type { Link } from '@link-checker/db';
 import type Redis from 'ioredis';
 import { PrismaService } from '../prisma/prisma.service';
 import {
@@ -48,7 +49,11 @@ export class LinksService {
     if (!project) throw new NotFoundException('Project not found');
   }
 
-  async list(userId: string, projectId: string, query: ListLinksQuery) {
+  async list(
+    userId: string,
+    projectId: string,
+    query: ListLinksQuery,
+  ): Promise<{ items: Link[]; total: number; page: number; limit: number }> {
     await this.assertProject(userId, projectId);
     const where: any = { projectId };
     if (query.source) where.source = query.source.toUpperCase();

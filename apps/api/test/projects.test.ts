@@ -3,7 +3,7 @@ import supertest from 'supertest';
 import { createTestApp, resetDb, seedAdmin, type TestApp } from './helpers/app';
 
 async function authedCookie(
-  request: supertest.SuperTest<supertest.Test>,
+  request: ReturnType<typeof supertest>,
   email: string,
   password: string,
 ): Promise<string[]> {
@@ -13,7 +13,7 @@ async function authedCookie(
 
 describe('Projects (integration)', () => {
   let ctx: TestApp;
-  let request: supertest.SuperTest<supertest.Test>;
+  let request: ReturnType<typeof supertest>;
 
   beforeAll(async () => {
     ctx = await createTestApp();

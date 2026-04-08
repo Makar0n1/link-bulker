@@ -441,7 +441,7 @@ const COLORS = {
   headerText: { r: 0.13, g: 0.13, b: 0.13 } as RGB,
 };
 
-const COLUMN_WIDTHS = [120, 70, 100, 90, 110, 160] as const;
+const COLUMN_WIDTHS: number[] = [120, 70, 100, 90, 110, 160];
 
 /**
  * Format a single Link into the 6 result cells with colours and weights

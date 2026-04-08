@@ -78,6 +78,8 @@ jobs:
           context: .
           file: ${{ matrix.dockerfile }}
           push: true
+          # The VPS is x86_64. Don't waste minutes on arm64.
+          platforms: linux/amd64
           tags: ${{ steps.meta.outputs.tags }}
           cache-from: type=gha,scope=${{ matrix.target }}
           cache-to: type=gha,scope=${{ matrix.target }},mode=max

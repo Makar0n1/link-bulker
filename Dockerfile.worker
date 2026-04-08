@@ -1,7 +1,10 @@
 # syntax=docker/dockerfile:1.7
 # ─────────────────────────────────────────────────────────────────────────────
 # Worker image — NestJS standalone + BullMQ consumers + Firecrawl + Sheets
-# Identical multi-stage strategy as Dockerfile.api but targets the worker.
+#
+# Same strategy as Dockerfile.api: skip turbo prune, use hoisted pnpm
+# node_modules so all workspace deps and Prisma client are reachable at
+# both compile-time and runtime.
 # ─────────────────────────────────────────────────────────────────────────────
 
 FROM node:20-alpine AS base
@@ -11,23 +14,24 @@ RUN apk add --no-cache libc6-compat openssl tini \
 WORKDIR /app
 ENV CI=true
 
-# ─── Pruner ──────────────────────────────────────────────────────────────────
-FROM base AS pruner
-RUN npm install -g turbo@2.1.3
-COPY . .
-RUN turbo prune @link-checker/worker --docker
-
 # ─── Builder ─────────────────────────────────────────────────────────────────
 FROM base AS builder
-COPY --from=pruner /app/out/json/ ./
-COPY --from=pruner /app/out/pnpm-lock.yaml ./pnpm-lock.yaml
-RUN pnpm install --frozen-lockfile
 
-COPY --from=pruner /app/out/full/ ./
+COPY . .
+
+RUN echo "node-linker=hoisted" > .npmrc \
+    && echo "shamefully-hoist=true" >> .npmrc \
+    && echo "public-hoist-pattern[]=*" >> .npmrc
+
+RUN pnpm install --no-frozen-lockfile
 
 RUN cd packages/db && pnpm exec prisma generate
 
-RUN pnpm turbo run build --filter=@link-checker/worker
+RUN pnpm --filter @link-checker/shared build \
+    && pnpm --filter @link-checker/db build \
+    && pnpm --filter @link-checker/crawler-core build \
+    && pnpm --filter @link-checker/worker-core build \
+    && pnpm --filter @link-checker/worker build
 
 # ─── Runtime ─────────────────────────────────────────────────────────────────
 FROM base AS runtime
@@ -41,8 +45,7 @@ RUN addgroup -g 1001 -S nodejs \
     && chown -R lc:nodejs /app
 USER lc
 
-# Worker has no HTTP port — health is liveness via process presence.
-# Compose-level healthcheck pings Redis from inside the container instead.
+# Worker has no HTTP port — health is liveness via Redis ping
 HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
     CMD node -e "const r=require('ioredis');const c=new r(process.env.REDIS_URL);c.ping().then(()=>process.exit(0)).catch(()=>process.exit(1))" || exit 1
 

@@ -1,6 +1,7 @@
 import { Injectable, OnModuleDestroy, OnModuleInit, Logger } from '@nestjs/common';
 import {
   PrismaClient,
+  Prisma,
   type Link,
   type LinkStatus,
   type SheetsTask,
@@ -146,7 +147,7 @@ export class LinkRepository implements OnModuleInit, OnModuleDestroy {
     projectId: string,
     rows: Array<{ donorUrl: string; acceptorRaw: string; acceptorHost: string }>,
   ): Promise<void> {
-    await this.prisma.$transaction(async (tx) => {
+    await this.prisma.$transaction(async (tx: Prisma.TransactionClient) => {
       await tx.link.deleteMany({ where: { sheetsTaskId } });
       if (rows.length > 0) {
         await tx.link.createMany({

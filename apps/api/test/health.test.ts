@@ -4,7 +4,7 @@ import { createTestApp, type TestApp } from './helpers/app';
 
 describe('Health (integration)', () => {
   let ctx: TestApp;
-  let request: supertest.SuperTest<supertest.Test>;
+  let request: ReturnType<typeof supertest>;
 
   beforeAll(async () => {
     ctx = await createTestApp();

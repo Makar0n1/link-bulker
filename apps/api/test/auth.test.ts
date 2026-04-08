@@ -4,7 +4,7 @@ import { createTestApp, resetDb, seedAdmin, type TestApp } from './helpers/app';
 
 describe('Auth (integration)', () => {
   let ctx: TestApp;
-  let request: supertest.SuperTest<supertest.Test>;
+  let request: ReturnType<typeof supertest>;
 
   beforeAll(async () => {
     ctx = await createTestApp();

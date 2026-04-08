@@ -200,8 +200,10 @@ services:
       - "yes"
       - --maxmemory
       - 768mb
+      # noeviction: BullMQ can't tolerate dropped keys (lost in-flight jobs).
+      # Better to fail enqueue with OOM than lose work silently.
       - --maxmemory-policy
-      - allkeys-lru
+      - noeviction
     volumes:
       - redis_data:/data
     networks:

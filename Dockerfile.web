@@ -3,6 +3,11 @@
 # Web image — Next.js 15 with `output: 'standalone'`
 #
 # Notes:
+#   - We DO NOT use `turbo prune` here. The combination of pnpm workspaces +
+#     Next.js webpack module resolution + pruned monorepo is fragile: webpack
+#     fails to resolve `@link-checker/shared` even though pnpm install creates
+#     the symlink. Skipping prune costs us a few seconds of upload (the build
+#     context is small thanks to .dockerignore) but is bulletproof.
 #   - NEXT_PUBLIC_API_URL must be baked at BUILD time (Next inlines it into
 #     the client bundle). Pass via --build-arg.
 #   - Standalone output produces a self-contained server.js that needs only
@@ -16,26 +21,36 @@ RUN apk add --no-cache libc6-compat tini wget \
 WORKDIR /app
 ENV CI=true
 
-# ─── Pruner ──────────────────────────────────────────────────────────────────
-FROM base AS pruner
-RUN npm install -g turbo@2.1.3
-COPY . .
-RUN turbo prune @link-checker/web --docker
-
 # ─── Builder ─────────────────────────────────────────────────────────────────
 FROM base AS builder
-COPY --from=pruner /app/out/json/ ./
-COPY --from=pruner /app/out/pnpm-lock.yaml ./pnpm-lock.yaml
-RUN pnpm install --frozen-lockfile
 
-COPY --from=pruner /app/out/full/ ./
+# Copy everything (filtered by .dockerignore — no node_modules, no .env, etc.)
+COPY . .
+
+# Force pnpm to use a hoisted node_modules layout (npm-style flat tree)
+# instead of the default symlink farm. This is the only reliable way to
+# make Next.js webpack resolve `@link-checker/shared` from a workspace
+# inside a Docker build — symlinks across pruned/copied trees are flaky.
+RUN echo "node-linker=hoisted" > .npmrc \
+    && echo "shamefully-hoist=true" >> .npmrc \
+    && echo "public-hoist-pattern[]=*" >> .npmrc
+
+# Install all workspace deps. With hoisted linker, workspace packages are
+# materialised as real directories inside node_modules.
+RUN pnpm install --no-frozen-lockfile
+
+# Build the workspace dep first so its dist/ exists before Next tries to
+# resolve @link-checker/shared from node_modules.
+RUN pnpm --filter @link-checker/shared build
 
 # Public URL of the API — baked into the client bundle.
 ARG NEXT_PUBLIC_API_URL=https://api.link-check-pro.top
 ENV NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL
 ENV NEXT_TELEMETRY_DISABLED=1
 
-RUN pnpm turbo run build --filter=@link-checker/web
+# Build web. shared/dist already exists from the step above, so Next can
+# resolve @link-checker/shared as a regular package.
+RUN pnpm --filter @link-checker/web build
 
 # ─── Runtime ─────────────────────────────────────────────────────────────────
 FROM node:20-alpine AS runtime
@@ -46,8 +61,9 @@ ENV NODE_ENV=production \
     PORT=3000 \
     HOSTNAME=0.0.0.0
 
-# Standalone output already contains a minimal node_modules with everything
-# next/server needs.
+# Standalone output already contains a minimal node_modules tree with the
+# transitive deps Next needs at runtime. We copy only what `output: standalone`
+# emits — final image stays small (~150 MB).
 COPY --from=builder /app/apps/web/.next/standalone ./
 COPY --from=builder /app/apps/web/.next/static ./apps/web/.next/static
 

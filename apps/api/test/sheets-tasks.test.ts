@@ -9,7 +9,7 @@ const redis = new Redis(process.env.REDIS_URL ?? 'redis://localhost:6379', {
 });
 
 async function authedCookie(
-  request: supertest.SuperTest<supertest.Test>,
+  request: ReturnType<typeof supertest>,
   email: string,
   password: string,
 ): Promise<string[]> {
@@ -24,7 +24,7 @@ async function clearLocks() {
 
 describe('Sheets tasks (integration)', () => {
   let ctx: TestApp;
-  let request: supertest.SuperTest<supertest.Test>;
+  let request: ReturnType<typeof supertest>;
 
   beforeAll(async () => {
     ctx = await createTestApp();

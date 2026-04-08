@@ -3,7 +3,7 @@ import supertest from 'supertest';
 import { createTestApp, resetDb, seedAdmin, type TestApp } from './helpers/app';
 
 async function authedCookie(
-  request: supertest.SuperTest<supertest.Test>,
+  request: ReturnType<typeof supertest>,
   email: string,
   password: string,
 ): Promise<string[]> {
@@ -13,7 +13,7 @@ async function authedCookie(
 
 describe('Stats (integration)', () => {
   let ctx: TestApp;
-  let request: supertest.SuperTest<supertest.Test>;
+  let request: ReturnType<typeof supertest>;
 
   beforeAll(async () => {
     ctx = await createTestApp();
@@ -26,6 +26,10 @@ describe('Stats (integration)', () => {
 
   beforeEach(async () => {
     await resetDb(ctx.prisma);
+    // Recreate the agent each test. Without this we occasionally hit
+    // "Parse Error: Expected HTTP/" because supertest re-uses a keep-alive
+    // socket whose state was wiped by resetDb mid-flight.
+    request = supertest(ctx.app.getHttpServer());
   });
 
   async function setupProject() {

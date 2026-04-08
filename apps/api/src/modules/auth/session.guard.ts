@@ -1,11 +1,14 @@
 import { CanActivate, ExecutionContext, Injectable, UnauthorizedException } from '@nestjs/common';
-import type { FastifyRequest } from 'fastify';
 import type { SessionUser } from '@link-checker/shared';
 import { AuthService, SESSION_COOKIE_NAME } from './auth.service';
 
-interface FastifyRequestWithCookies extends FastifyRequest {
-  cookies: Record<string, string | undefined>;
-  unsignCookie(value: string): { valid: boolean; renew: boolean; value: string | null };
+// We don't extend FastifyRequest because @fastify/cookie's UnsignResult is
+// a discriminated union (`{valid: true; ...} | {valid: false; ...}`) and
+// extending FastifyRequest with a wider signature breaks TS variance rules.
+// A loose shape is enough: this is only used inside the guard.
+interface RequestShape {
+  cookies?: Record<string, string | undefined>;
+  unsignCookie(value: string): { valid: boolean; value: string | null };
   user?: SessionUser;
 }
 
@@ -14,7 +17,7 @@ export class SessionGuard implements CanActivate {
   constructor(private readonly authService: AuthService) {}
 
   async canActivate(ctx: ExecutionContext): Promise<boolean> {
-    const req = ctx.switchToHttp().getRequest<FastifyRequestWithCookies>();
+    const req = ctx.switchToHttp().getRequest<RequestShape>();
     const raw = req.cookies?.[SESSION_COOKIE_NAME];
     if (!raw) throw new UnauthorizedException('Not authenticated');
 

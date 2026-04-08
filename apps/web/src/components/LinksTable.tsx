@@ -43,7 +43,10 @@ const ROW_HEIGHT = 52;
  * scroll position.
  */
 
-const COLS = [
+type ColAlign = 'left' | 'center' | 'right';
+type ColDef = { key: string; label: string; width: string; align: ColAlign };
+
+const COLS: ReadonlyArray<ColDef> = [
   { key: 'donor', label: 'Donor URL', width: 'minmax(180px, 1fr)', align: 'left' },
   { key: 'acceptor', label: 'Acceptor', width: 'minmax(120px, 0.6fr)', align: 'left' },
   { key: 'status', label: 'Status', width: '88px', align: 'left' },

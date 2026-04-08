@@ -59,7 +59,7 @@ export class CrawlerModule {
 
     const semaphoreProvider = {
       provide: FIRECRAWL_SEMAPHORE,
-      inject: ['WORKER_REDIS'] as const,
+      inject: ['WORKER_REDIS'],
       useFactory: (redis: ReturnType<typeof createRedisClient>) =>
         new RedisSemaphore(redis, {
           key: 'sem:firecrawl',
@@ -70,7 +70,7 @@ export class CrawlerModule {
 
     const rateLimiterProvider = {
       provide: DOMAIN_RATE_LIMITER,
-      inject: ['WORKER_REDIS'] as const,
+      inject: ['WORKER_REDIS'],
       useFactory: (redis: ReturnType<typeof createRedisClient>) =>
         new DomainRateLimiter(redis, {
           ratePerSec: env.PER_DOMAIN_RPS,
