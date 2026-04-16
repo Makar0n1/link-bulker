@@ -19,7 +19,11 @@ import {
 
 const HEARTBEAT_INTERVAL_MS = 10_000;
 const PROJECT_LOCK_TTL_MS = 30 * 60 * 1000;
-const INTERNAL_CONCURRENCY = 5;
+// How many links to process in parallel within a single sheets-task run.
+// The global Firecrawl semaphore (45 slots) is the real ceiling — this just
+// controls how many we fire per chunk before awaiting. With 3 worker replicas
+// this means up to 3 × 15 = 45 in-flight, matching the semaphore limit.
+const INTERNAL_CONCURRENCY = 15;
 
 /**
  * Result columns written back to the spreadsheet, starting at
@@ -126,41 +130,59 @@ export class SheetsTaskService {
         dataStartRow: task.dataStartRow,
       });
 
-      // 2. Validate and normalize each row. Invalid rows are kept (so we can
-      //    report them in the writeback) but skipped during checking.
+      // 2. Validate and normalize each row.
       const normalized = rows.map((r) => normalizeRow(r));
 
-      // 3. Replace existing Link records for this task with the fresh batch.
+      // 3. Filter: only rows where BOTH donor AND acceptor are present get
+      //    persisted as Links. Rows where either field is empty are silently
+      //    skipped — they are not errors, just unfilled cells in the sheet.
+      //    Rows where both are present but invalid (bad URL format, etc.) are
+      //    still persisted so the user sees explicit ERROR feedback.
+      const validRows: Array<{ norm: NormalizedRow; sheetRow: SheetRow }> = [];
+      for (let i = 0; i < normalized.length; i++) {
+        const norm = normalized[i]!;
+        const sheetRow = rows[i]!;
+        const donorEmpty = !norm.donorUrl;
+        const acceptorEmpty = !norm.acceptor;
+        // Skip completely empty or half-filled rows — don't create Links
+        if (donorEmpty || acceptorEmpty) continue;
+        validRows.push({ norm, sheetRow });
+      }
+
+      this.logger.log(
+        `Task ${sheetsTaskId}: ${rows.length} sheet rows, ${validRows.length} with both donor+acceptor, ${rows.length - validRows.length} skipped (empty)`,
+      );
+
+      // 4. Replace existing Link records for this task with the filtered batch.
       await this.links.replaceSheetsLinks(
         sheetsTaskId,
         task.projectId,
-        normalized.map((n) => ({
-          donorUrl: n.donorUrl,
-          acceptorRaw: n.acceptor,
-          acceptorHost: n.acceptorHost ?? '',
+        validRows.map((v) => ({
+          donorUrl: v.norm.donorUrl,
+          acceptorRaw: v.norm.acceptor,
+          acceptorHost: v.norm.acceptorHost ?? '',
         })),
       );
 
-      // 4. Re-fetch the persisted Link rows in deterministic order so we can
+      // 5. Re-fetch the persisted Link rows in deterministic order so we can
       //    process them through SingleLinkProcessor and later map results
       //    back to spreadsheet rows.
       const persistedLinks = await this.links.findLinksBySheetsTaskOrdered(sheetsTaskId);
 
-      // We must keep the per-spreadsheet-row mapping. The DB ordering
-      // matches createMany insertion order which mirrors `normalized`.
+      // Keep the per-spreadsheet-row mapping. The DB ordering matches
+      // createMany insertion order which mirrors `validRows`.
       const validProcessableLinks: Link[] = [];
       const sheetRowByLinkId = new Map<string, SheetRow>();
 
       for (let i = 0; i < persistedLinks.length; i++) {
         const link = persistedLinks[i]!;
-        const sheetRow = rows[i]!;
-        sheetRowByLinkId.set(link.id, sheetRow);
-        const norm = normalized[i]!;
-        if (norm.errors.length === 0) {
+        const vr = validRows[i]!;
+        sheetRowByLinkId.set(link.id, vr.sheetRow);
+        if (vr.norm.errors.length === 0) {
           validProcessableLinks.push(link);
         } else {
-          // Mark invalid rows as ERROR with a friendly reason — they will
-          // never enter the crawler.
+          // Row has both fields filled but one is malformed (e.g. invalid URL).
+          // This IS a real user error — mark as ERROR so they see it.
           await this.links.saveResult(link.id, {
             ok: false,
             donorStatusCode: null,
@@ -174,13 +196,13 @@ export class SheetsTaskService {
             linkFound: null,
             occurrences: null,
             occurrencesCount: 0,
-            error: `Invalid input: ${norm.errors.join(', ')}`,
+            error: `Invalid input: ${vr.norm.errors.join(', ')}`,
             durationMs: 0,
           });
         }
       }
 
-      // 5. Process valid links in parallel chunks. The global Firecrawl
+      // 6. Process valid links in parallel chunks. The global Firecrawl
       //    semaphore caps cluster-wide concurrency at 45.
       const total = persistedLinks.length;
       let processed = persistedLinks.length - validProcessableLinks.length;

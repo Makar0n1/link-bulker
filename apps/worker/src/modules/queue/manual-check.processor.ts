@@ -6,7 +6,9 @@ import { LinkRepository } from './link.repository';
 import { ProgressPublisher } from './progress.publisher';
 import { SingleLinkProcessor } from './single-link.processor';
 
-const INTERNAL_CONCURRENCY = 5;
+// How many links to process in parallel within a single manual-check run.
+// The global Firecrawl semaphore (45 slots) is the real ceiling.
+const INTERNAL_CONCURRENCY = 15;
 const HEARTBEAT_INTERVAL_MS = 10_000;
 const PROJECT_LOCK_TTL_MS = 30 * 60 * 1000;
 

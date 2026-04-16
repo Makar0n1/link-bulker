@@ -28,6 +28,10 @@ x-worker-base: &worker-base
     NODE_ENV: production
     DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
     REDIS_URL: redis://redis:6379
+    # Node defaults to ~750 MB heap which is not enough for 10K+ link batches.
+    # Workers have mem_limit 1500m — give Node 1200 MB, leaving ~300 MB for
+    # V8 overhead, native allocations and OS buffers.
+    NODE_OPTIONS: '--max-old-space-size=1200'
   depends_on:
     postgres:
       condition: service_healthy
