@@ -90,11 +90,12 @@ describe('SheetsTaskService.run (integration)', () => {
     expect(sheetsClient.columnWidths.length).toBeGreaterThanOrEqual(1);
   });
 
-  it('marks invalid rows as ERROR without crawling them', async () => {
+  it('skips empty rows and marks malformed rows as ERROR without crawling them', async () => {
     const sheetsClient = new MockSheetsClient([
-      { rowNumber: 2, donorUrl: 'not a url', acceptor: 'studibucht.de' },
-      { rowNumber: 3, donorUrl: 'https://valid.example/page', acceptor: '' },
-      { rowNumber: 4, donorUrl: 'https://valid.example/x', acceptor: 'studibucht.de' },
+      { rowNumber: 2, donorUrl: 'not a url', acceptor: 'studibucht.de' },  // both present but donor invalid → ERROR
+      { rowNumber: 3, donorUrl: 'https://valid.example/page', acceptor: '' }, // acceptor empty → SKIPPED entirely
+      { rowNumber: 4, donorUrl: '', acceptor: 'studibucht.de' },              // donor empty → SKIPPED entirely
+      { rowNumber: 5, donorUrl: 'https://valid.example/x', acceptor: 'studibucht.de' }, // valid → DONE
     ]);
     rig = await buildQueueRig({ sheetsClient });
 
@@ -107,12 +108,14 @@ describe('SheetsTaskService.run (integration)', () => {
       where: { sheetsTaskId: task.id },
       orderBy: { createdAt: 'asc' },
     });
-    expect(links).toHaveLength(3);
+    // Only 2 Links created: row 2 (invalid URL → ERROR) + row 5 (valid → DONE).
+    // Rows 3 and 4 are skipped because one field is empty.
+    expect(links).toHaveLength(2);
 
-    // The two invalid ones are ERROR with explanatory text
+    // The malformed one is ERROR with explanatory text
     const errored = links.filter((l) => l.status === 'ERROR');
-    expect(errored).toHaveLength(2);
-    expect(errored.every((l) => l.error?.startsWith('Invalid input:'))).toBe(true);
+    expect(errored).toHaveLength(1);
+    expect(errored[0]!.error).toMatch(/Invalid input:/);
 
     // The valid one is DONE
     const done = links.filter((l) => l.status === 'DONE');
